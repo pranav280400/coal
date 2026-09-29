@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1.7
+# Next.js web app (dashboards + PWA + BFF) — standalone production image.
+#
+# The build is hermetic: fonts are vendored (app/fonts), so the only network the
+# build needs is the npm registry. Nothing is fetched from Google at build time.
+
+FROM node:22-alpine AS base
+WORKDIR /app
+ENV PNPM_HOME=/pnpm \
+    PATH=/pnpm:$PATH \
+    npm_config_store_dir=/pnpm/store \
+    NEXT_TELEMETRY_DISABLED=1
+# Install the pnpm version pinned in package.json ONCE, in the shared base layer, so
+# neither `deps` nor `build` re-downloads it from the registry mid-build.
+COPY package.json ./
+RUN corepack enable && corepack install
+
+FROM base AS deps
+COPY pnpm-lock.yaml pnpm-workspace.yaml ./
+# Cache mount keeps the pnpm content-addressable store warm across builds. It lives on a
+# different filesystem than /app, so pnpm copies instead of hard-linking — that is expected
+# and is what makes the resulting node_modules self-contained.
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store,sharing=locked \
+    pnpm install --frozen-lockfile
+
+FROM base AS build
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+# Next's build cache makes incremental rebuilds dramatically faster; it is a cache mount so
+# it never lands in a layer.
+RUN --mount=type=cache,id=next-build,target=/app/.next/cache \
+    pnpm build
+
+FROM node:22-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
+RUN addgroup -S -g 10001 web && adduser -S -u 10001 -G web web
+COPY --from=build --chown=web:web /app/.next/standalone ./
+COPY --from=build --chown=web:web /app/.next/static ./.next/static
+COPY --from=build --chown=web:web /app/public ./public
+USER web
+EXPOSE 3000
+# start-period covers Node boot so the container is not reported unhealthy while starting.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:3000/login >/dev/null || exit 1
+CMD ["node", "server.js"]

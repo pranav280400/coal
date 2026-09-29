@@ -12,6 +12,12 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Non-frontend code in this monorepo
+    "backend/**",
+    "infra/**",
+    "public/sw.js",
+    // Vendored third-party components (React Bits), kept close to upstream
+    "components/reactbits/**",
   ]),
 ]);
 

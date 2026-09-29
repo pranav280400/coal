@@ -1,0 +1,40 @@
+{
+  "realm": "coalminegov",
+  "enabled": true,
+  "displayName": "Government SSO (local test)",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "clients": [
+    {
+      "clientId": "coalminegov-web",
+      "name": "Lumen",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "dev-only-keycloak-client-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost:3000/api/auth/sso/callback"],
+      "webOrigins": ["http://localhost:3000"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000/login"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "dgms.regulator",
+      "email": "regulator@coalminegov.example",
+      "emailVerified": true,
+      "firstName": "DGMS",
+      "lastName": "Regulator",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "Regulator@SSO2026", "temporary": false }]
+    }
+  ]
+}

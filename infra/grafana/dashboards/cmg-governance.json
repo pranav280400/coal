@@ -1,0 +1,133 @@
+{
+  "uid": "cmg-governance",
+  "title": "Lumen \u2014 Governance Signals",
+  "tags": [
+    "coalminegov"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "editable": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "bargauge",
+      "title": "Mine compliance risk score (latest)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cmg-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "cmg_mine_risk_score",
+          "legendFormat": "{{mine_code}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cmg-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Risk score trend",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cmg-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "cmg_mine_risk_score",
+          "legendFormat": "{{mine_code}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cmg-prometheus"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Escalations per hour",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cmg-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 10,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (increase(cmg_escalations_total[1h]))",
+          "legendFormat": "{{kind}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cmg-prometheus"
+          }
+        }
+      ]
+    }
+  ]
+}
