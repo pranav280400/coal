@@ -1,0 +1,562 @@
+# CoalMineGov — full stack (backing services + application tier + observability)
+#
+#   scripts/bootstrap-env.ps1        # Windows  — creates .env and fills every secret
+#   ./scripts/bootstrap-env.sh       # Linux/macOS
+#   docker compose up -d --build
+#
+# Secrets marked `:?` below are mandatory: if one is missing, `docker compose` stops
+# immediately with a readable message instead of leaving a container crash-looping.
+#
+# Every published port is overridable, e.g. POSTGRES_HOST_PORT=5433 in .env, for machines
+# that already run Postgres/Redis locally or where Windows has reserved the port.
+#
+# Profiles:
+#   gpu  — local vLLM inference servers (NVIDIA GPU + nvidia-container-toolkit required)
+#   sso  — Keycloak as a local OIDC provider to test "Sign in with Government SSO"
+
+name: coalminegov
+
+# Memory limits on the services below are generous ceilings that catch a runaway process;
+# they are not sizing targets. Raise any of them in .env (API_MEMORY_LIMIT,
+# WORKER_MEMORY_LIMIT, CONSUMERS_MEMORY_LIMIT) if a container is being OOM-killed.
+#
+# Log rotation: without this, Docker's json-file driver grows without bound and a stack
+# left running for a few days can fill the disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# `migrate`, `api`, `worker` and `consumers` are the same image running different
+# commands. Only ONE of them (api) declares `build:` — when all four did, BuildKit
+# exported and unpacked the identical ~1 GB image four times on every `--build`, which
+# cost minutes per rebuild. The other three resolve the tag `api` has just built
+# locally, because compose finishes all builds before it creates any container.
+x-backend: &backend
+  image: coalminegov/backend:${APP_VERSION:-1.0.0}
+  env_file: .env
+  environment:
+    # Defaults to the Postgres container. Set EXTERNAL_DATABASE_URL in .env to point the
+    # app tier at a real/managed PostgreSQL instead - when it is set, POSTGRES_PASSWORD
+    # is no longer required. Note: plain DATABASE_URL in .env has NO effect here, it is
+    # only read when the backend runs outside Docker.
+    DATABASE_URL: ${EXTERNAL_DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-cmg}:${POSTGRES_PASSWORD:?missing POSTGRES_PASSWORD - run the bootstrap-env script in scripts/}@postgres:5432/${POSTGRES_DB:-coalminegov}}
+    REDIS_URL: redis://:${REDIS_PASSWORD:?missing REDIS_PASSWORD - run the bootstrap-env script in scripts/}@redis:6379/0
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    QDRANT_URL: http://qdrant:6333
+    TEMPORAL_HOST: temporal:7233
+    # Fixed to the compose network. These must NOT use `${VAR:-default}`: .env defines
+    # LLM_BASE_URL/S3_ENDPOINT_URL as the *host* addresses (localhost:4000, localhost:9000)
+    # for running the backend outside Docker, and `:-` only falls back when a variable is
+    # unset — so the containers ended up pointing at their own loopback.
+    LLM_BASE_URL: http://litellm:4000/v1
+    S3_ENDPOINT_URL: http://minio:9000
+    S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-cmg-minio}
+    S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?missing S3_SECRET_ACCESS_KEY - run the bootstrap-env script in scripts/}
+  logging: *logging
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+    kafka:
+      condition: service_healthy
+    qdrant:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+
+services:
+  # ------------------------------------------------------------ data tier
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cmg}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?missing POSTGRES_PASSWORD - run the bootstrap-env script in scripts/}
+      POSTGRES_DB: ${POSTGRES_DB:-coalminegov}
+    command: ["postgres", "-c", "max_connections=300", "-c", "shared_buffers=256MB"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports: ["127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cmg} -d ${POSTGRES_DB:-coalminegov}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { memory: 1g }
+    logging: *logging
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?missing REDIS_PASSWORD - run the bootstrap-env script in scripts/}", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    ports: ["127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { memory: 512m }
+    logging: *logging
+    restart: unless-stopped
+
+  kafka:
+    image: apache/kafka:3.9.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:9094,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 6
+      KAFKA_LOG_RETENTION_HOURS: 2160
+      # A single-broker dev cluster does not need the 1 GB default JVM heap; this saves
+      # ~700 MB of RAM on a laptop without affecting throughput at demo volumes.
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xmx512m -Xms512m}
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+    ports: ["127.0.0.1:${KAFKA_HOST_PORT:-9094}:9094"]
+    healthcheck:
+      # A plain TCP probe. The previous check started a new JVM (kafka-broker-api-versions.sh)
+      # every 10 s, which kept ~1.5 CPU cores permanently busy and starved the CPU-hosted LLM.
+      test: ["CMD-SHELL", "nc -z localhost 9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 45s
+    deploy:
+      resources:
+        limits: { memory: 1500m }
+    logging: *logging
+    restart: unless-stopped
+
+  qdrant:
+    # Keep this in step with the `qdrant-client` pin in backend/requirements.txt — the
+    # client refuses to run more than one minor version away from the server and logs
+    # "incompatible with server version" on every call.
+    image: qdrant/qdrant:v1.19.1
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?missing QDRANT_API_KEY - run the bootstrap-env script in scripts/}
+    volumes:
+      - qdrantdata:/qdrant/storage
+    ports: ["127.0.0.1:${QDRANT_HOST_PORT:-6333}:6333"]
+    # The image ships no curl/wget, so probe the readiness endpoint over bash's /dev/tcp.
+    # It must invoke `bash` explicitly: CMD-SHELL runs /bin/sh (dash here), which has no
+    # /dev/tcp and fails with "Directory nonexistent". /readyz needs no API key.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333 && printf 'GET /readyz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    deploy:
+      resources:
+        limits: { memory: 1g }
+    logging: *logging
+    restart: unless-stopped
+
+  minio:
+    # quay.io, not Docker Hub: MinIO withdrew the community images from docker.io, so
+    # `minio/minio:...` now fails with "pull access denied" and takes the whole stack
+    # down with it. quay.io still serves the same release.
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-cmg-minio}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:?missing S3_SECRET_ACCESS_KEY - run the bootstrap-env script in scripts/}
+    volumes:
+      - miniodata:/data
+    ports: ["127.0.0.1:${MINIO_HOST_PORT:-9000}:9000", "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { memory: 768m }
+    logging: *logging
+    restart: unless-stopped
+
+  # ------------------------------------------------------------- workflows
+  temporal:
+    image: temporalio/auto-setup:1.27.2
+    environment:
+      DB: postgres12
+      # Temporal keeps its own `temporal` + `temporal_visibility` databases. By default
+      # they live in the Postgres container; override these four to host them on the same
+      # external server you point EXTERNAL_DATABASE_URL at.
+      DB_PORT: ${TEMPORAL_DB_PORT:-5432}
+      POSTGRES_USER: ${TEMPORAL_DB_USER:-${POSTGRES_USER:-cmg}}
+      POSTGRES_PWD: ${TEMPORAL_DB_PASSWORD:-${POSTGRES_PASSWORD:?missing POSTGRES_PASSWORD - run the bootstrap-env script in scripts/}}
+      POSTGRES_SEEDS: ${TEMPORAL_DB_HOST:-postgres}
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+      PROMETHEUS_ENDPOINT: 0.0.0.0:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports: ["127.0.0.1:${TEMPORAL_HOST_PORT:-7233}:7233"]
+    # Gate the worker on a real gRPC health check instead of "the container started" —
+    # auto-setup spends ~30s creating schemas before it serves traffic.
+    # Address must be the service name, not 127.0.0.1: auto-setup binds the frontend to
+    # the container's own IP (BIND_ON_IP defaults to `hostname -i`), so the loopback
+    # interface refuses the connection.
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    deploy:
+      resources:
+        limits: { memory: 1g }
+    logging: *logging
+    restart: unless-stopped
+
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      # The UI is served from :8233 on the host — that is the origin its own browser
+      # requests come from.
+      TEMPORAL_CORS_ORIGINS: http://localhost:8233
+    depends_on:
+      temporal:
+        condition: service_healthy
+    ports: ["127.0.0.1:${TEMPORAL_UI_HOST_PORT:-8233}:8080"]
+    deploy:
+      resources:
+        limits: { memory: 256m }
+    logging: *logging
+    restart: unless-stopped
+
+  # ------------------------------------------------------------ AI gateway
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    # NOTE: deliberately NOT `env_file: .env`. LiteLLM auto-detects a DATABASE_URL in its
+    # environment and tries to run Prisma migrations against it; our DATABASE_URL uses the
+    # SQLAlchemy `postgresql+asyncpg://` dialect, which Prisma cannot parse, so the gateway
+    # would crash-loop. Pass only the variables the gateway config actually references.
+    environment:
+      LITELLM_MASTER_KEY: ${LLM_API_KEY:?missing LLM_API_KEY - run the bootstrap-env script in scripts/}
+      VLLM_CHAT_API_BASE: ${VLLM_CHAT_API_BASE:-http://vllm-chat:8000/v1}
+      VLLM_EMBED_API_BASE: ${VLLM_EMBED_API_BASE:-http://vllm-embed:8000/v1}
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # CPU inference backend (compose profile `cpu-ai`).
+      OLLAMA_API_BASE: ${OLLAMA_API_BASE:-http://ollama:11434}
+      LITELLM_LOG: ${LITELLM_LOG:-INFO}
+    volumes:
+      - ./infra/litellm/config.yaml:/app/config.yaml:ro
+    ports: ["127.0.0.1:${LITELLM_HOST_PORT:-4000}:4000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5).status==200 else 1)"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s   # loading the router config + provider clients takes ~60s
+    deploy:
+      resources:
+        limits: { memory: 1g }
+    logging: *logging
+    restart: unless-stopped
+
+  # Local CPU inference. vLLM needs an NVIDIA GPU; this serves the same
+  # OpenAI-compatible API on plain CPU so the AI features work on any machine.
+  # Models live in the `ollamadata` volume and are pulled once (see scripts/pull-models).
+  ollama:
+    profiles: ["cpu-ai"]
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      # Keep both models resident: reloading them after an idle spell made the first
+      # assistant question of the day take minutes. The API also warms them at start-up.
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:--1}
+      # Two models are resident at once (chat + embeddings) on a memory-constrained host.
+      OLLAMA_MAX_LOADED_MODELS: "2"
+      OLLAMA_NUM_PARALLEL: "1"
+    volumes:
+      - ollamadata:/root/.ollama
+    ports: ["127.0.0.1:${OLLAMA_HOST_PORT:-11434}:11434"]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: "${OLLAMA_MEMORY_LIMIT:-4g}"
+    logging: *logging
+    restart: unless-stopped
+
+  vllm-chat:
+    profiles: ["gpu"]
+    image: vllm/vllm-openai:v0.10.1
+    command: ["--model", "${VLLM_CHAT_MODEL:-Qwen/Qwen2.5-7B-Instruct}", "--served-model-name", "cmg-chat",
+              "--max-model-len", "16384", "--gpu-memory-utilization", "0.80", "--api-key", "${VLLM_API_KEY}"]
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - hfcache:/root/.cache/huggingface
+    ipc: host
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 40
+      start_period: 300s   # first start downloads ~16 GB of weights
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    logging: *logging
+    restart: unless-stopped
+
+  vllm-embed:
+    profiles: ["gpu"]
+    image: vllm/vllm-openai:v0.10.1
+    command: ["--model", "${VLLM_EMBED_MODEL:-BAAI/bge-m3}", "--served-model-name", "cmg-embed",
+              "--task", "embed", "--gpu-memory-utilization", "0.15", "--api-key", "${VLLM_API_KEY}"]
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - hfcache:/root/.cache/huggingface
+    ipc: host
+    # Started after the chat server so the two do not race for the same GPU memory.
+    depends_on:
+      vllm-chat:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 40
+      start_period: 300s
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    logging: *logging
+    restart: unless-stopped
+
+  # -------------------------------------------------------- application tier
+  migrate:
+    <<: *backend
+    command: ["python", "-m", "app.cli", "migrate"]
+    restart: "no"
+    deploy:
+      resources:
+        limits: { memory: 768m }
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    # The single build of the shared backend image (see the x-backend note above).
+    build:
+      context: ./backend
+    command: ["gunicorn", "app.main:app", "-k", "uvicorn.workers.UvicornWorker", "-w", "${API_WORKERS:-4}",
+              "-b", "0.0.0.0:8000", "--timeout", "120", "--graceful-timeout", "30", "--access-logfile", "-"]
+    ports: ["127.0.0.1:${API_HOST_PORT:-8000}:8000"]
+    healthcheck:
+      # 127.0.0.1, not localhost: localhost resolves to ::1 first and gunicorn binds IPv4
+      # only, so the probe stalls until it times out and the API never reports healthy.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=5).status==200 else 1)"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    stop_grace_period: 40s   # slightly above gunicorn's --graceful-timeout
+    deploy:
+      resources:
+        limits:
+          memory: "${API_MEMORY_LIMIT:-3g}"
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.workflows.worker"]
+    init: true               # reap tesseract/pdfium child processes left by OCR activities
+    stop_grace_period: 45s   # let in-flight Temporal activities finish before SIGKILL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9464/metrics', timeout=5).status==200 else 1)"]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: "${WORKER_MEMORY_LIMIT:-2500m}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  consumers:
+    <<: *backend
+    command: ["python", "-m", "app.consumers.runner"]
+    init: true
+    stop_grace_period: 45s   # allow in-flight Kafka batches to commit their offsets
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9465/metrics', timeout=5).status==200 else 1)"]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: "${CONSUMERS_MEMORY_LIMIT:-2g}"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: coalminegov/web:${APP_VERSION:-1.0.0}
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      NEXT_PUBLIC_APP_URL: ${PUBLIC_WEB_URL:-http://localhost:3000}
+      NEXT_PUBLIC_MAP_TILE_URL: ${NEXT_PUBLIC_MAP_TILE_URL:-https://tile.openstreetmap.org/{z}/{x}/{y}.png}
+      NEXT_PUBLIC_MAP_ATTRIBUTION: ${NEXT_PUBLIC_MAP_ATTRIBUTION:-&copy; OpenStreetMap contributors}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports: ["127.0.0.1:${WEB_HOST_PORT:-3000}:3000"]
+    deploy:
+      resources:
+        limits: { memory: 768m }
+    logging: *logging
+    restart: unless-stopped
+
+  # ----------------------------------------------------------- observability
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-cmg}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-coalminegov}?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { memory: 128m }
+    logging: *logging
+    restart: unless-stopped
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.67.0
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { memory: 128m }
+    logging: *logging
+    restart: unless-stopped
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    command: ["--kafka.server=kafka:9092"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { memory: 128m }
+    logging: *logging
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=30d",
+              "--storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-4GB}",
+              "--web.enable-lifecycle"]
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - promdata:/prometheus
+    ports: ["127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"]
+    deploy:
+      resources:
+        limits: { memory: 1g }
+    logging: *logging
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?missing GRAFANA_ADMIN_PASSWORD - run the bootstrap-env script in scripts/}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    depends_on: [prometheus]
+    ports: ["127.0.0.1:${GRAFANA_HOST_PORT:-3001}:3000"]
+    deploy:
+      resources:
+        limits: { memory: 512m }
+    logging: *logging
+    restart: unless-stopped
+
+  # ------------------------------------------------------ optional: local SSO
+  keycloak:
+    profiles: ["sso"]
+    image: quay.io/keycloak/keycloak:26.1
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-change-me-keycloak}
+      # Browser-facing URLs use localhost:8081; back-channel (token/JWKS) calls from the
+      # API container use http://keycloak:8080 — set SSO_ISSUER_URL to the latter.
+      KC_HOSTNAME: http://localhost:8081
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    volumes:
+      - ./infra/keycloak/realm-coalminegov.json:/opt/keycloak/data/import/realm-coalminegov.json:ro
+    ports: ["127.0.0.1:${KEYCLOAK_HOST_PORT:-8081}:8080"]
+    deploy:
+      resources:
+        limits: { memory: 1g }
+    logging: *logging
+
+volumes:
+  ollamadata:
+  pgdata:
+  redisdata:
+  kafkadata:
+  qdrantdata:
+  miniodata:
+  promdata:
+  grafanadata:
+  hfcache:

@@ -1,0 +1,536 @@
+@import "tailwindcss";
+
+/* `dark:` follows the chosen theme (data-theme on <html>), not only the OS setting. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+@custom-variant light (&:where([data-theme="light"], [data-theme="light"] *));
+
+/* =============================================================== Lumen
+   Dark "coal seam" system.
+   Coal surfaces (#0A0B0C page · #141619 cards · #1B1E22 raised) carry the
+   structure; copper is the single accent — actions, focus and emphasis —
+   brightened a step so it reads on black. Status colours glow rather than
+   print: solid for marks, 14% tints for chips.
+   Type: Satoshi for display (headings, numbers), Plus Jakarta Sans for text.
+   ==================================================================== */
+
+@theme {
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-satoshi), var(--font-jakarta), ui-sans-serif, sans-serif;
+  --font-hand: var(--font-caveat), cursive;
+
+  /* coal — surfaces */
+  --color-coal-950: #060707;
+  --color-coal-900: #101214;
+  --color-coal-800: #1b1e22;
+  --color-coal-700: #262a2f;
+  --color-coal-600: #353a40;
+
+  /* steel — secondary text and quiet marks, tuned for a dark ground */
+  --color-steel-600: #a3aab0;
+  --color-steel-500: #8b9399;
+  --color-steel-400: #6e767c;
+  --color-steel-300: #4d545a;
+  --color-steel-200: #33393e;
+
+  /* copper — the accent (50–200 are dark tints for fills behind copper text) */
+  --color-copper-900: #5f3218;
+  --color-copper-800: #7e4520;
+  --color-copper-700: #a55c2c;
+  --color-copper-600: #c4733a;
+  --color-copper-500: #d4884e;
+  --color-copper-400: #e3a473;
+  --color-copper-300: #edc19b;
+  --color-copper-200: #4a3222;
+  --color-copper-100: #2e2017;
+  --color-copper-50: #1f1711;
+
+  --color-canvas: #0a0b0c;
+  --color-surface: #141619;
+  --color-raised: #1b1e22;
+  --color-ink: #f4f2ee;
+  --color-muted: #979ea4;
+  --color-line: #24282d;
+  --color-line-strong: #343a40;
+  --color-fg: #ffffff;
+
+  /* status */
+  --color-ok: #34c77b;
+  --color-ok-soft: rgb(52 199 123 / 0.14);
+  --color-warn: #f2b134;
+  --color-warn-soft: rgb(242 177 52 / 0.14);
+  --color-bad: #f25f4c;
+  --color-bad-soft: rgb(242 95 76 / 0.14);
+  --color-info: #6aa2ff;
+  --color-info-soft: rgb(106 162 255 / 0.14);
+  --color-violet: #a58bff;
+  --color-violet-soft: rgb(165 139 255 / 0.14);
+
+  --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.035), 0 1px 2px rgb(0 0 0 / 0.4), 0 10px 30px -12px rgb(0 0 0 / 0.6);
+  --shadow-lift: inset 0 1px 0 rgb(255 255 255 / 0.05), 0 18px 40px -12px rgb(0 0 0 / 0.75), 0 0 0 1px rgb(212 136 78 / 0.18);
+
+  --animate-star-movement-bottom: star-movement-bottom linear infinite alternate;
+  --animate-star-movement-top: star-movement-top linear infinite alternate;
+  --animate-shimmer: shimmer 2.2s linear infinite;
+  --animate-float: float 7s ease-in-out infinite;
+  --animate-marquee: marquee 40s linear infinite;
+}
+
+@keyframes star-movement-bottom {
+  0% { transform: translate(0%, 0%); opacity: 1; }
+  100% { transform: translate(-100%, 0%); opacity: 0; }
+}
+@keyframes star-movement-top {
+  0% { transform: translate(0%, 0%); opacity: 1; }
+  100% { transform: translate(100%, 0%); opacity: 0; }
+}
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+@keyframes copper-drift {
+  from { background-position: 0% 50%; }
+  to { background-position: 100% 50%; }
+}
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+:root {
+  color-scheme: dark;
+  --glass-bg: rgb(20 22 25 / 0.62);
+  --glass-border: rgb(255 255 255 / 0.07);
+  --dot: rgb(255 255 255 / 0.05);
+  --mark-a: #f4f2ee;
+  --mark-b: #c3c9cc;
+  --mark-c: #8b9399;
+  --brand-grad: linear-gradient(100deg, #f4f2ee 0%, #e9c7a4 55%, #d4884e 100%);
+  --copper-text: linear-gradient(90deg, #edc19b, #d4884e, #f4f2ee, #d4884e, #edc19b);
+}
+
+/* ------------------------------------------------------------ light theme
+   Warm paper instead of coal: cream page, white cards, ink text. Copper steps
+   darken so accent text keeps contrast on white; tints become pale washes. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-canvas: #f6f1ea;
+  --color-surface: #ffffff;
+  --color-raised: #fbf8f4;
+  --color-ink: #1c1714;
+  --color-muted: #6a625b;
+  --color-line: #ebe3d9;
+  --color-line-strong: #dcd1c4;
+  --color-fg: #2a1f17;
+
+  --color-steel-600: #4f555a;
+  --color-steel-500: #666d73;
+  --color-steel-400: #8a9197;
+  --color-steel-300: #b8bec2;
+  --color-steel-200: #dde0e2;
+
+  --color-copper-700: #8a4c24;
+  --color-copper-600: #b0642f;
+  --color-copper-500: #c2773f;
+  --color-copper-400: #a95f2c;
+  --color-copper-300: #95521f;
+  --color-copper-200: #eecfb2;
+  --color-copper-100: #f5e3d3;
+  --color-copper-50: #fbf3eb;
+
+  --color-ok: #1d8a54;
+  --color-ok-soft: rgb(29 138 84 / 0.1);
+  --color-warn: #b8740f;
+  --color-warn-soft: rgb(217 144 31 / 0.13);
+  --color-bad: #d23a2b;
+  --color-bad-soft: rgb(210 58 43 / 0.09);
+  --color-info: #2d68d0;
+  --color-info-soft: rgb(45 104 208 / 0.09);
+  --color-violet: #6a4bd0;
+  --color-violet-soft: rgb(106 75 208 / 0.09);
+
+  --shadow-card: 0 1px 2px rgb(60 40 20 / 0.05), 0 12px 32px -14px rgb(60 40 20 / 0.18);
+  --shadow-lift: 0 22px 44px -16px rgb(60 40 20 / 0.28), 0 0 0 1px rgb(176 100 47 / 0.18);
+
+  --glass-bg: rgb(255 255 255 / 0.72);
+  --glass-border: rgb(42 31 23 / 0.08);
+  --dot: rgb(42 31 23 / 0.07);
+  --mark-a: #3a4247;
+  --mark-b: #22272a;
+  --mark-c: #121416;
+  --brand-grad: linear-gradient(100deg, #1c1714 0%, #3b2618 38%, #8a4c24 72%, #c2773f 100%);
+  --copper-text: linear-gradient(90deg, #8a4c24, #c2773f, #5f3218, #c2773f, #8a4c24);
+}
+
+html,
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+}
+
+html {
+  /* no font inflation on rotate; no double-tap zoom (pinch is blocked by the viewport + NoZoom) */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  touch-action: manipulation;
+}
+html,
+body {
+  /* nothing may push the page wider than the screen */
+  overflow-x: clip;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3,
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+::selection {
+  background: rgb(212 136 78 / 0.35);
+  color: #fff;
+}
+
+/* Hero display type: tight and heavy. */
+.display {
+  font-family: var(--font-display);
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  line-height: 0.86;
+  text-wrap: balance;
+}
+
+/* Frosted panel used by the shell, nav and floating cards. */
+.glass {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+/* Frosted look without backdrop-filter, for cards that already sit on a pre-blurred photo:
+   a live blur under moving content is re-computed every frame. */
+.glass-solid {
+  background: color-mix(in srgb, var(--color-surface) 86%, transparent);
+  border: 1px solid var(--glass-border);
+}
+
+/* ---------------------------------------------------------------- GlowCard
+   Border ring + inner wash that follow the pointer (--gx / --gy set by fx.tsx).
+   Both are pseudo-elements that exist only while a hover-capable pointer is over the card. */
+@media (hover: hover) {
+  .glow-card:hover {
+    border-color: transparent;
+  }
+  .glow-card:hover::before,
+  .glow-card:hover::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+    border-radius: inherit;
+  }
+  /* ring: a 1px band of copper light, cut out with a mask */
+  .glow-card:hover::before {
+    inset: -1px;
+    padding: 1px;
+    background: radial-gradient(260px circle at var(--gx, 50%) var(--gy, 50%), rgb(227 164 115 / 0.95), rgb(212 136 78 / 0.25) 45%, var(--color-line) 75%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+    z-index: 2;
+  }
+  /* wash: a faint pool of light inside the card */
+  .glow-card:hover::after {
+    inset: 0;
+    background: radial-gradient(340px circle at var(--gx, 50%) var(--gy, 50%), rgb(212 136 78 / 0.09), transparent 70%);
+    z-index: 0;
+  }
+}
+
+/* Faint copper light pooled at the top of the app, with a hairline dot grid. */
+.app-backdrop {
+  background:
+    radial-gradient(1200px 520px at 70% -10%, rgb(212 136 78 / 0.10), transparent 70%),
+    radial-gradient(800px 400px at 0% 0%, rgb(106 162 255 / 0.04), transparent 70%),
+    radial-gradient(var(--dot) 1px, transparent 1px) 0 0 / 22px 22px,
+    var(--color-canvas);
+}
+
+/* Film grain on hero sections (static SVG noise — no animation cost). */
+.grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* no blend mode: blending a whole section re-composites it on every scroll frame */
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Copper hairline that fades out at both ends. */
+.hairline {
+  background: linear-gradient(90deg, transparent, rgb(212 136 78 / 0.5), transparent);
+  height: 1px;
+}
+
+/* Skeleton shimmer. */
+.shimmer {
+  background: linear-gradient(90deg, var(--color-surface) 25%, var(--color-raised) 50%, var(--color-surface) 75%);
+  background-size: 200% 100%;
+  animation: var(--animate-shimmer);
+}
+
+/* Charts (Recharts) on dark surfaces. */
+.recharts-cartesian-axis-tick-value {
+  fill: var(--color-muted);
+}
+.recharts-cartesian-grid line {
+  stroke: var(--color-line);
+}
+.recharts-default-tooltip {
+  background: var(--color-raised) !important;
+  border: 1px solid var(--color-line-strong) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.5);
+}
+.recharts-tooltip-label {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+.recharts-legend-item-text {
+  color: var(--color-muted) !important;
+}
+.recharts-tooltip-cursor {
+  fill: rgb(255 255 255 / 0.04);
+}
+
+/* Maps: any light tile set is turned into a dark, low-glare version. */
+[data-theme="dark"] .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.82) contrast(0.92) saturate(0.6);
+}
+.leaflet-bar a {
+  background: var(--color-raised) !important;
+  color: var(--color-ink) !important;
+  border-color: var(--color-line-strong) !important;
+}
+.leaflet-control-attribution {
+  background: rgb(10 11 12 / 0.7) !important;
+  color: var(--color-muted) !important;
+}
+.leaflet-control-attribution a {
+  color: var(--color-copper-400) !important;
+}
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: var(--color-raised);
+  color: var(--color-ink);
+}
+
+/* Small caps-style label used above sections and on nav links. */
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  font-weight: 600;
+  font-size: 0.72rem;
+}
+
+/* Rock face behind the sidebar brand — coal texture, very low contrast. */
+.rockface {
+  background-image:
+    radial-gradient(120% 80% at 20% 0%, rgb(255 255 255 / 0.07), transparent 60%),
+    url("/images/coal-texture.jpg");
+  background-size: cover;
+  background-position: center;
+}
+
+/* Tables become labelled cards on phones: each cell shows its column heading
+   (copied onto data-label by <Table>), the first cell acts as the card title. */
+@media (max-width: 639px) {
+  .rtable {
+    overflow: visible;
+  }
+  .rtable table,
+  .rtable tbody,
+  .rtable tr,
+  .rtable td {
+    display: block;
+    width: 100%;
+  }
+  .rtable table {
+    min-width: 0 !important;
+  }
+  .rtable thead {
+    display: none;
+  }
+  .rtable tr {
+    border-bottom: 1px solid var(--color-line);
+    padding: 14px 16px;
+  }
+  .rtable tr:last-child {
+    border-bottom: 0;
+  }
+  .rtable td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    border: 0 !important;
+    padding: 5px 0 !important;
+    text-align: right !important;
+    white-space: normal !important;
+    font-size: 14px;
+  }
+  .rtable td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    color: var(--color-muted);
+    font-size: 13px;
+    font-weight: 500;
+    text-align: left;
+  }
+  .rtable td:first-child {
+    display: block;
+    padding-top: 0 !important;
+    padding-bottom: 6px !important;
+    text-align: left !important;
+    font-size: 15px;
+  }
+  .rtable td:first-child::before,
+  .rtable td[data-label=""]::before {
+    content: none;
+  }
+  .rtable td[data-label=""] {
+    justify-content: flex-end;
+  }
+}
+
+/* Filter bars: two dropdowns per row on phones; search boxes and the mine picker span the row. */
+@media (max-width: 639px) {
+  .filterbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .filterbar > input,
+  .filterbar > select[aria-label="Mine"] {
+    grid-column: span 2;
+  }
+}
+
+/* Dialogs, sheets and menus: short, soft entrances (skipped with reduced motion). */
+@keyframes overlay-in {
+  from { opacity: 0; }
+}
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+}
+@keyframes sheet-in {
+  from { transform: translateY(24px); opacity: 0.6; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+}
+.animate-overlay-in { animation: overlay-in 180ms ease-out; }
+.animate-dialog-in { animation: dialog-in 220ms cubic-bezier(0.22, 1, 0.36, 1); }
+.animate-sheet-in { animation: sheet-in 260ms cubic-bezier(0.22, 1, 0.36, 1); }
+.animate-pop-in { animation: pop-in 160ms ease-out; }
+@media (min-width: 640px) {
+  .sm\:animate-dialog-in { animation: dialog-in 220ms cubic-bezier(0.22, 1, 0.36, 1); }
+}
+
+/* Login slideshow: a slow push-in on the visible photo. */
+@keyframes kenburns {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.07);
+  }
+}
+.animate-kenburns {
+  animation: kenburns 7.5s ease-out forwards;
+  transform-origin: 30% 50%;
+}
+
+/* Thin scrollbars inside panels */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.14) transparent;
+}
+
+/* Leaflet container should inherit rounded corners of its card */
+.leaflet-container {
+  background: var(--color-raised) !important;
+  font-family: var(--font-sans);
+  border-radius: inherit;
+  z-index: 0;
+}
+
+.markdown :where(p, ul, ol, table, pre) {
+  margin: 0.5rem 0;
+}
+.markdown ul {
+  list-style: disc;
+  padding-left: 1.25rem;
+}
+.markdown ol {
+  list-style: decimal;
+  padding-left: 1.25rem;
+}
+.markdown table {
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid var(--color-line);
+  padding: 0.25rem 0.5rem;
+}
+.markdown code {
+  background: var(--color-copper-50);
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.25rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Theme switch: colours cross-fade briefly, set only while the switch is happening. */
+html.theme-switching,
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition: background-color 0.35s ease, border-color 0.35s ease, color 0.25s ease, fill 0.35s ease !important;
+}
+
+/* Brand wordmark fill (hero "LUMEN"). */
+.brand-fill {
+  background: var(--brand-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* iOS zooms into any focused field under 16px; keep phone fields at 16px or more. */
+@media (max-width: 639px) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em);
+  }
+}

@@ -1,0 +1,19 @@
+# Build context for Dockerfile.web — keep it small so `docker build` stays fast.
+node_modules
+.next
+.git
+.github
+.claude
+backend
+infra
+docs
+*.md
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+npm-debug.log*
+.pnpm-debug.log*
+# Large README screenshots — not served by the app.
+public/login.png
+public/ui.png

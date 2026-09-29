@@ -1,0 +1,81 @@
+# LiteLLM gateway — the single OpenAI-compatible endpoint the backend talks to.
+# Application code only knows the logical names `cmg-chat` and `cmg-embed`; routing to
+# physical models happens here, so the backend never changes when the backend model does.
+#
+# Three interchangeable ways to serve those two names (pick one with LLM_BACKEND in .env):
+#
+#   cpu      — Ollama on plain CPU, no GPU and no API key. Works on any laptop.
+#              Start with:  docker compose --profile cpu-ai up -d ollama
+#              Pull models: ./scripts/pull-models.sh   (or .ps1)
+#   gpu      — your own vLLM servers (fastest, best quality; needs an NVIDIA GPU)
+#              Start with:  docker compose --profile gpu up -d
+#   cloud    — a hosted provider, if data-residency policy allows it
+#
+# Required env: LITELLM_MASTER_KEY (= LLM_API_KEY the backend sends as a bearer token).
+
+model_list:
+  # ---------------------------------------------------------------- CPU (Ollama)
+  # `ollama_chat/` is the chat-tuned wrapper (applies the model's chat template);
+  # `ollama/` is used for embeddings. Both talk to the `ollama` compose service.
+  - model_name: cmg-chat
+    litellm_params:
+      # To swap the chat model, change this line and re-pull (scripts/pull-models).
+      model: ollama_chat/qwen2.5:3b-instruct
+      api_base: os.environ/OLLAMA_API_BASE
+      timeout: 600            # a CPU-hosted model is slow to first token
+      stream_timeout: 600
+    model_info:
+      description: Multilingual instruction model served locally on CPU by Ollama
+
+  - model_name: cmg-embed
+    litellm_params:
+      # bge-m3 emits 1024-d vectors, matching EMBEDDING_DIM=1024. If you change this
+      # model you must change EMBEDDING_DIM too and re-index the Qdrant collection.
+      model: ollama/bge-m3
+      api_base: os.environ/OLLAMA_API_BASE
+      timeout: 300
+    model_info:
+      mode: embedding
+      description: Multilingual embedding model, 1024-d (must match EMBEDDING_DIM)
+
+  # ------------------------------------------------------------------ GPU (vLLM)
+  # Enabled by `docker compose --profile gpu up -d`. Point LLM_BACKEND=gpu and these
+  # names take over as the primary route for cmg-chat / cmg-embed.
+  - model_name: cmg-chat-gpu
+    litellm_params:
+      model: openai/cmg-chat             # "openai/" = any OpenAI-compatible server
+      api_base: os.environ/VLLM_CHAT_API_BASE
+      api_key: os.environ/VLLM_API_KEY
+      timeout: 120
+    model_info:
+      description: Instruction-tuned multilingual chat model served by vLLM
+
+  - model_name: cmg-embed-gpu
+    litellm_params:
+      model: openai/cmg-embed
+      api_base: os.environ/VLLM_EMBED_API_BASE
+      api_key: os.environ/VLLM_API_KEY
+      timeout: 60
+    model_info:
+      mode: embedding
+      description: BAAI/bge-m3 (1024-d) served by vLLM
+
+  # --------------------------------------------------- optional cloud fallback
+  # Uncomment and set OPENAI_API_KEY to use a hosted model when the local one is down.
+  # Check data-residency policy before sending government data to any external provider.
+  # - model_name: cmg-chat-cloud
+  #   litellm_params:
+  #     model: openai/gpt-4o-mini
+  #     api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  drop_params: true          # silently drop params a backend doesn't support
+  num_retries: 2
+  request_timeout: 600
+  # fallbacks: [{"cmg-chat": ["cmg-chat-cloud"]}]
+
+router_settings:
+  routing_strategy: simple-shuffle
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
